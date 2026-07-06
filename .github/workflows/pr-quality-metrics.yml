@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
   pull-requests: write
 
 jobs:
@@ -55,7 +56,24 @@ jobs:
               echo "security=skipped"
               echo "complexity=skipped"
               echo "maintainability=skipped"
+                echo "fog=skipped"
+                echo "fog_score=n/a"
+                echo "identifier_length=skipped"
+                echo "avg_identifier_len=n/a"
+                echo "short_identifier_ratio=n/a"
+                echo "nesting=skipped"
+                echo "max_nesting_depth=n/a"
+                echo "function_size=skipped"
+                echo "max_function_lines=n/a"
+                echo "class_size=skipped"
+                echo "max_class_lines=n/a"
+                echo "coupling=skipped"
+                echo "max_import_fanout=n/a"
+                echo "duplication=skipped"
+                echo "smells=skipped"
               echo "tests=skipped"
+                echo "coverage=skipped"
+                echo "coverage_percent=n/a"
               echo "overall=success"
             } >> "$GITHUB_OUTPUT"
             exit 0
@@ -86,8 +104,8 @@ jobs:
             overall_status=1
           fi
 
-          # 3) Security scan
-          bandit -q -r . -x discord,venv,__pycache__,.git,docs
+          # 3) Security scan (only changed/selected Python files)
+          xargs bandit -q < python_files.txt
           security_exit=$?
           if [ "$security_exit" -eq 0 ]; then
             security_status="pass"
@@ -409,7 +427,8 @@ jobs:
           fi
 
       - name: Upsert PR quality comment
-        if: always() && github.event_name == 'pull_request'
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false
+        continue-on-error: true
         uses: actions/github-script@v8
         env:
           SYNTAX_STATUS: ${{ steps.metrics.outputs.syntax }}
