@@ -418,6 +418,7 @@ jobs:
                 coverage_percent="n/a"
                 overall_status=1
               fi
+            fi
           fi
 
           if [ "$overall_status" -eq 0 ]; then
