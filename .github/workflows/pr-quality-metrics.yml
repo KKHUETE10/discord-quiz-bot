@@ -93,7 +93,9 @@ jobs:
           lint_log="lint.log"
           security_log="security.log"
           complexity_log="complexity.log"
+          complexity_full_log="complexity_full.log"
           maintainability_log="maintainability.log"
+          maintainability_full_log="maintainability_full.log"
 
           # 1) Syntax check
           xargs python -m py_compile < python_files.txt > "$syntax_log" 2>&1
@@ -126,6 +128,7 @@ jobs:
           fi
 
           # 4) Cyclomatic complexity (threshold: rank C or better)
+          xargs radon cc -s < python_files.txt > "$complexity_full_log" 2>&1
           xargs radon cc -s -n C < python_files.txt > "$complexity_log" 2>&1
           complexity_exit=$?
           if [ "$complexity_exit" -ne 0 ]; then
@@ -139,6 +142,7 @@ jobs:
           fi
 
           # 5) Maintainability index (threshold: rank B or better)
+          xargs radon mi -s < python_files.txt > "$maintainability_full_log" 2>&1
           xargs radon mi -s -n B < python_files.txt > "$maintainability_log" 2>&1
           maintainability_exit=$?
           if [ "$maintainability_exit" -ne 0 ]; then
@@ -150,6 +154,80 @@ jobs:
           else
             maintainability_status="pass"
           fi
+
+          python - <<'PY' > radon_summary.out
+          import re
+
+          complexity_file = "complexity_full.log"
+          maintainability_file = "maintainability_full.log"
+
+          cc_score = "n/a"
+          cc_target = "n/a"
+          cc_rank = "n/a"
+          current_file = None
+          max_score = None
+          max_target = None
+          max_rank = None
+
+          with open(complexity_file, "r", encoding="utf-8") as file_obj:
+            for raw_line in file_obj:
+              line = raw_line.rstrip("\n")
+              stripped = line.strip()
+              if not stripped:
+                continue
+              if stripped.endswith(".py") and " - " not in stripped:
+                current_file = stripped
+                continue
+              match = re.search(r"^([A-Z])\s+\d+:\d+\s+(.+)\s+-\s+([A-F])\s+\((\d+)\)$", stripped)
+              if not match:
+                continue
+              score = int(match.group(4))
+              if max_score is None or score > max_score:
+                max_score = score
+                max_rank = match.group(3)
+                block_name = match.group(2)
+                max_target = f"{current_file}: {block_name}" if current_file else block_name
+
+          if max_score is not None:
+            cc_score = str(max_score)
+            cc_target = max_target
+            cc_rank = max_rank
+
+          mi_score = "n/a"
+          mi_target = "n/a"
+          mi_rank = "n/a"
+          min_score = None
+          min_target = None
+          min_rank = None
+
+          with open(maintainability_file, "r", encoding="utf-8") as file_obj:
+            for raw_line in file_obj:
+              stripped = raw_line.strip()
+              if not stripped:
+                continue
+              match = re.search(r"^(.*\.py)\s+-\s+([A-C])\s+\(([0-9]+(?:\.[0-9]+)?)\)$", stripped)
+              if not match:
+                continue
+              score = float(match.group(3))
+              if min_score is None or score < min_score:
+                min_score = score
+                min_target = match.group(1)
+                min_rank = match.group(2)
+
+          if min_score is not None:
+            mi_score = f"{min_score:.2f}"
+            mi_target = min_target
+            mi_rank = min_rank
+
+          print(f"max_complexity_score={cc_score}")
+          print(f"max_complexity_rank={cc_rank}")
+          print(f"max_complexity_target={cc_target}")
+          print(f"min_maintainability_score={mi_score}")
+          print(f"min_maintainability_rank={mi_rank}")
+          print(f"min_maintainability_target={mi_target}")
+          PY
+
+          source radon_summary.out
 
           # 6) Additional readability and structure metrics
           python - <<'PY' > extra_metrics.out
@@ -383,6 +461,15 @@ jobs:
             echo "smells=$smells_status"
           } >> "$GITHUB_OUTPUT"
 
+          {
+            echo "max_complexity_score=$max_complexity_score"
+            echo "max_complexity_rank=$max_complexity_rank"
+            echo "max_complexity_target=$max_complexity_target"
+            echo "min_maintainability_score=$min_maintainability_score"
+            echo "min_maintainability_rank=$min_maintainability_rank"
+            echo "min_maintainability_target=$min_maintainability_target"
+          } >> "$GITHUB_OUTPUT"
+
           # 7) Unit tests (if present)
           if [ "${{ github.event_name }}" = "pull_request_target" ]; then
             tests_status="skipped"
@@ -468,11 +555,17 @@ jobs:
               echo "### Cyclomatic complexity details"
               tail -n 80 "$complexity_log" | sed 's/^/> /'
               echo
+              echo "> Worst block: $max_complexity_target"
+              echo "> Worst score: $max_complexity_score (rank $max_complexity_rank)"
+              echo
             fi
 
             if [ "$maintainability_status" = "fail" ]; then
               echo "### Maintainability details"
               tail -n 80 "$maintainability_log" | sed 's/^/> /'
+              echo
+              echo "> Lowest MI file: $min_maintainability_target"
+              echo "> Lowest MI score: $min_maintainability_score (rank $min_maintainability_rank)"
               echo
             fi
             echo "EOF"
@@ -491,7 +584,13 @@ jobs:
           LINT_STATUS: ${{ steps.metrics.outputs.lint }}
           SECURITY_STATUS: ${{ steps.metrics.outputs.security }}
           COMPLEXITY_STATUS: ${{ steps.metrics.outputs.complexity }}
+          MAX_COMPLEXITY_SCORE: ${{ steps.metrics.outputs.max_complexity_score }}
+          MAX_COMPLEXITY_RANK: ${{ steps.metrics.outputs.max_complexity_rank }}
+          MAX_COMPLEXITY_TARGET: ${{ steps.metrics.outputs.max_complexity_target }}
           MAINTAINABILITY_STATUS: ${{ steps.metrics.outputs.maintainability }}
+          MIN_MAINTAINABILITY_SCORE: ${{ steps.metrics.outputs.min_maintainability_score }}
+          MIN_MAINTAINABILITY_RANK: ${{ steps.metrics.outputs.min_maintainability_rank }}
+          MIN_MAINTAINABILITY_TARGET: ${{ steps.metrics.outputs.min_maintainability_target }}
           FOG_STATUS: ${{ steps.metrics.outputs.fog }}
           FOG_SCORE: ${{ steps.metrics.outputs.fog_score }}
           IDENTIFIER_STATUS: ${{ steps.metrics.outputs.identifier_length }}
@@ -531,8 +630,8 @@ jobs:
             | Syntax compilation | ${icon(process.env.SYNTAX_STATUS)} ${process.env.SYNTAX_STATUS || 'n/a'} |
             | Lint (ruff) | ${icon(process.env.LINT_STATUS)} ${process.env.LINT_STATUS || 'n/a'} |
             | Security scan (bandit) | ${icon(process.env.SECURITY_STATUS)} ${process.env.SECURITY_STATUS || 'n/a'} |
-            | Cyclomatic complexity (radon cc, max C) | ${icon(process.env.COMPLEXITY_STATUS)} ${process.env.COMPLEXITY_STATUS || 'n/a'} |
-            | Maintainability index (radon mi, min B) | ${icon(process.env.MAINTAINABILITY_STATUS)} ${process.env.MAINTAINABILITY_STATUS || 'n/a'} |
+            | Cyclomatic complexity (radon cc, max C) | ${icon(process.env.COMPLEXITY_STATUS)} ${process.env.COMPLEXITY_STATUS || 'n/a'} (worst: ${process.env.MAX_COMPLEXITY_SCORE || 'n/a'}, rank: ${process.env.MAX_COMPLEXITY_RANK || 'n/a'}) |
+            | Maintainability index (radon mi, min B) | ${icon(process.env.MAINTAINABILITY_STATUS)} ${process.env.MAINTAINABILITY_STATUS || 'n/a'} (lowest: ${process.env.MIN_MAINTAINABILITY_SCORE || 'n/a'}, rank: ${process.env.MIN_MAINTAINABILITY_RANK || 'n/a'}) |
             | Readability (Gunning Fog, max 20) | ${icon(process.env.FOG_STATUS)} ${process.env.FOG_STATUS || 'n/a'} (score: ${process.env.FOG_SCORE || 'n/a'}) |
             | Identifier length (avg >= 3 and short ratio <= 20%) | ${icon(process.env.IDENTIFIER_STATUS)} ${process.env.IDENTIFIER_STATUS || 'n/a'} (avg: ${process.env.AVG_IDENTIFIER_LEN || 'n/a'}, short ratio: ${process.env.SHORT_IDENTIFIER_RATIO || 'n/a'}) |
             | Nesting depth (max 4) | ${icon(process.env.NESTING_STATUS)} ${process.env.NESTING_STATUS || 'n/a'} (max depth: ${process.env.MAX_NESTING_DEPTH || 'n/a'}) |
