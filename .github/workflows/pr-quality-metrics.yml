@@ -1,7 +1,7 @@
 name: PR Software Quality Metrics
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
 
@@ -19,6 +19,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          repository: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -28,8 +30,10 @@ jobs:
       - name: Install dependencies and quality tooling
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
           pip install ruff bandit radon pytest pytest-cov textstat pylint
+          if [ "${{ github.event_name }}" != "pull_request_target" ]; then
+            pip install -r requirements.txt
+          fi
 
       - name: Run quality metrics
         id: metrics
@@ -37,7 +41,7 @@ jobs:
         run: |
           set +e
 
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
+          if [ "${{ github.event_name }}" = "pull_request_target" ]; then
             base_sha="${{ github.event.pull_request.base.sha }}"
             head_sha="${{ github.event.pull_request.head.sha }}"
             git diff --name-only --diff-filter=ACMR "$base_sha...$head_sha" \
@@ -380,35 +384,40 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
           # 7) Unit tests (if present)
-          tests_count=$(find . -type f \( -name 'test_*.py' -o -name '*_test.py' \) | wc -l | tr -d ' ')
-          if [ "$tests_count" -eq 0 ]; then
+          if [ "${{ github.event_name }}" = "pull_request_target" ]; then
             tests_status="skipped"
             coverage_status="skipped"
             coverage_percent="n/a"
           else
-            pytest -q --cov=. --cov-report=term --cov-report=xml:coverage.xml
-            tests_exit=$?
-            if [ "$tests_exit" -eq 0 ]; then
-              tests_status="pass"
+            tests_count=$(find . -type f \( -name 'test_*.py' -o -name '*_test.py' \) | wc -l | tr -d ' ')
+            if [ "$tests_count" -eq 0 ]; then
+              tests_status="skipped"
+              coverage_status="skipped"
+              coverage_percent="n/a"
             else
-              tests_status="fail"
-              overall_status=1
-            fi
-
-            if [ -f coverage.xml ]; then
-              coverage_percent=$(python -c 'import xml.etree.ElementTree as ET; root = ET.parse("coverage.xml").getroot(); line_rate = float(root.attrib.get("line-rate", 0.0)); print(f"{line_rate * 100:.2f}")')
-              if python -c 'import sys; cov = float(sys.argv[1]); raise SystemExit(0 if cov >= 70.0 else 1)' "$coverage_percent"
-              then
-                coverage_status="pass"
+              pytest -q --cov=. --cov-report=term --cov-report=xml:coverage.xml
+              tests_exit=$?
+              if [ "$tests_exit" -eq 0 ]; then
+                tests_status="pass"
               else
-                coverage_status="fail"
+                tests_status="fail"
                 overall_status=1
               fi
-            else
-              coverage_status="fail"
-              coverage_percent="n/a"
-              overall_status=1
-            fi
+
+              if [ -f coverage.xml ]; then
+                coverage_percent=$(python -c 'import xml.etree.ElementTree as ET; root = ET.parse("coverage.xml").getroot(); line_rate = float(root.attrib.get("line-rate", 0.0)); print(f"{line_rate * 100:.2f}")')
+                if python -c 'import sys; cov = float(sys.argv[1]); raise SystemExit(0 if cov >= 70.0 else 1)' "$coverage_percent"
+                then
+                  coverage_status="pass"
+                else
+                  coverage_status="fail"
+                  overall_status=1
+                fi
+              else
+                coverage_status="fail"
+                coverage_percent="n/a"
+                overall_status=1
+              fi
           fi
 
           if [ "$overall_status" -eq 0 ]; then
@@ -473,7 +482,7 @@ jobs:
           exit 0
 
       - name: Upsert PR quality comment
-        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false
+        if: always() && github.event_name == 'pull_request_target'
         continue-on-error: true
         uses: actions/github-script@v8
         env:
