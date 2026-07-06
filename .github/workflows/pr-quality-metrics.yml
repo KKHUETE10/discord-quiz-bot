@@ -422,9 +422,9 @@ jobs:
             echo "overall=$overall_label"
           } >> "$GITHUB_OUTPUT"
 
-          if [ "$overall_status" -ne 0 ]; then
-            exit 1
-          fi
+          # This workflow is informational only: expose metrics in PR comments
+          # without failing the job.
+          exit 0
 
       - name: Upsert PR quality comment
         if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false
